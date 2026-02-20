@@ -1,0 +1,2 @@
+export {processProductImage} from "./processProductImage";
+
