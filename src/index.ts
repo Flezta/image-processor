@@ -1,2 +1,0 @@
-export {processProductImage} from "./processProductImage";
-
