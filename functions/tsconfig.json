@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    /* ---------- Language & Runtime ---------- */
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "node16",
+    "moduleResolution": "node16",
+
+    /* ---------- Output ---------- */
+    "outDir": "lib",
+    "rootDir": "src",
+    "sourceMap": true,
+
+    /* ---------- Interop ---------- */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+
+    /* ---------- Strictness ---------- */
+    "strict": true,
+    "noImplicitAny": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    /* ---------- Firebase / Node ---------- */
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
+
+    /* ---------- Performance ---------- */
+    "incremental": true
+  },
+
+  "compileOnSave": true,
+
+  "include": ["src"],
+  "exclude": ["node_modules", "lib",  "scripts"]
+}
