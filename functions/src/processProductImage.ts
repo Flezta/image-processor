@@ -7,10 +7,13 @@ import os from "os";
 import fs from "fs/promises";
 import dotenv from "dotenv";
 
+dotenv.config();
+
+// ---------- Interfaces ----------
 export interface ProductImageSizes {
   thumbnail: string; // 200px
-  medium: string; // 600px
-  large: string; // 1200px
+  medium: string; // 800px
+  large: string; // 1500px
 }
 
 export interface ProductImage {
@@ -18,46 +21,51 @@ export interface ProductImage {
   sizes: ProductImageSizes;
   isDefault?: boolean;
   order?: number;
+  attributes: { color: string };
 }
 
-export interface ProductColor {
-  value: string; // e.g., "Red"
+export interface ProductDocument extends mongoose.Document {
+  productId: string;
+  variantProperties: Record<string, string[]>;
   images: ProductImage[];
 }
-dotenv.config();
 
+// ---------- Env ----------
 const MONGO_URI = process.env.MONGO_URI;
 const BUCKET_NAME = process.env.BUCKET_NAME;
 const REGION = process.env.REGION;
 
 if (!MONGO_URI || !BUCKET_NAME || !REGION) {
   throw new Error(
-    "Missing required environment variables: MONGO_URI, BUCKET_NAME, " +
-      "and REGION",
+    "Missing required environment variables: MONGO_URI, BUCKET_NAME, and REGION",
   );
 }
-admin.initializeApp();
 
+// ---------- Firebase ----------
+admin.initializeApp();
 const storage = admin.storage().bucket(BUCKET_NAME);
 
 // ---------- Mongo Connection ----------
 let mongoConnected = false;
-console.log("🪣 Listening to bucket:", BUCKET_NAME);
+
 /**
  * Connects to MongoDB if not already connected.
  */
-async function connectMongo() {
-  if (!mongoConnected && MONGO_URI) {
+async function connectMongo(): Promise<void> {
+  if (!mongoConnected) {
+    if (!MONGO_URI) {
+      throw new Error("MONGO_URI is not defined in environment variables");
+    }
     await mongoose.connect(MONGO_URI);
     mongoConnected = true;
   }
 }
 
-// ---------- Minimal Product Model ----------
+// ---------- Product Schema ----------
 const ProductSchema = new mongoose.Schema(
   {
     productId: String,
-    variantProperties: Object,
+    variantProperties: {type: Object, default: {}},
     images: [
       {
         name: String,
@@ -67,25 +75,51 @@ const ProductSchema = new mongoose.Schema(
           large: String,
         },
         isDefault: Boolean,
-        attributes: {
-          color: String,
-        },
+        attributes: {color: String},
       },
     ],
   },
   {collection: "products"},
 );
 
-const Product = mongoose.model("Product", ProductSchema);
+const Product = mongoose.model<ProductDocument>("Product", ProductSchema);
 
 // ---------- Image Sizes ----------
-const IMAGE_SIZES = {
+const IMAGE_SIZES: Record<keyof ProductImageSizes, number> = {
   thumbnail: 200,
   medium: 800,
   large: 1500,
 };
 
+// ---------- Dead-Letter Handler ----------
+/**
+ * Moves a file to the dead-letter folder when processing fails.
+ * @param filePath Path of the file to move
+ */
+async function moveToDeadLetter(filePath: string): Promise<void> {
+  try {
+    const fileName = path.basename(filePath);
+    const randomThreeDigits = Math.floor(100 + Math.random() * 900);
+    const destination = `dead-letter/${randomThreeDigits}_${fileName}`;
+
+    await storage.file(filePath).setMetadata({
+      metadata: {status: "dead-letter"},
+    });
+    await storage.file(filePath).move(destination);
+
+    console.warn(`📦 Moved to dead-letter → ${destination}`);
+  } catch (err) {
+    console.error("❌ Dead-letter move failed:", err);
+  }
+}
+
 // ---------- Main Function ----------
+/**
+ * Processes uploaded product images:
+ * - Resizes to thumbnail, medium, large
+ * - Uploads to bucket under `products/{productId}/`
+ * - Updates product document in Mongo
+ */
 export const processProductImage = onObjectFinalized(
   {
     bucket: BUCKET_NAME,
@@ -96,12 +130,12 @@ export const processProductImage = onObjectFinalized(
   async (event) => {
     const filePath = event.data.name;
     const metadata = event.data.metadata || {};
-    console.log("metadata is", metadata);
+
     if (!filePath) return;
 
     // Skip already processed or dead-letter
     if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
-      console.log("Skipping already processed or dead-letter file:", filePath);
+      console.log("Skipping already processed file:", filePath);
       return;
     }
 
@@ -109,6 +143,7 @@ export const processProductImage = onObjectFinalized(
 
     const productId = metadata.productId || metadata.productid;
     const color = metadata.color;
+
     if (!productId) {
       console.error("Missing productId metadata for", filePath);
       return moveToDeadLetter(filePath);
@@ -127,8 +162,8 @@ export const processProductImage = onObjectFinalized(
       return moveToDeadLetter(filePath);
     }
 
-    // Validate color still exists
-    const colorAxis = Object.keys(product.variantProperties || {}).find(
+    // Validate color axis exists
+    const colorAxis = Object.keys(product.variantProperties).find(
       (k) => k.toLowerCase() === "color" || k.toLowerCase() === "colour",
     );
 
@@ -153,21 +188,20 @@ export const processProductImage = onObjectFinalized(
     const tempInput = path.join(os.tmpdir(), fileName);
 
     try {
-      await storage.file(filePath).download({
-        destination: tempInput,
-      });
+      await storage.file(filePath).download({destination: tempInput});
 
-      const processedUrls: Record<string, string> = {};
+      const processedUrls: ProductImageSizes = {
+        thumbnail: "",
+        medium: "",
+        large: "",
+      };
 
       for (const [key, width] of Object.entries(IMAGE_SIZES)) {
         const outputName = `${path.parse(fileName).name}_${width}.jpg`;
         const tempOutput = path.join(os.tmpdir(), outputName);
 
         await sharp(tempInput)
-          .resize(width, width, {
-            fit: "inside",
-            withoutEnlargement: true,
-          })
+          .resize(width, width, {fit: "inside", withoutEnlargement: true})
           .jpeg({quality: 85})
           .toFile(tempOutput);
 
@@ -181,21 +215,20 @@ export const processProductImage = onObjectFinalized(
           },
         });
 
-        processedUrls[key] =
+        processedUrls[key as keyof ProductImageSizes] =
           `https://storage.googleapis.com/${BUCKET_NAME}/${destination}`;
-
         await fs.unlink(tempOutput);
       }
 
       await storage.file(filePath).delete();
       await fs.unlink(tempInput);
 
-      // Determine default
+      // Determine default image
       const hasDefault = product.images?.some(
-        (img: any) => img.isDefault === true,
+        (img: ProductImage) => img.isDefault,
       );
 
-      const newImage = {
+      const newImage: ProductImage = {
         name: fileName,
         sizes: processedUrls,
         isDefault: !hasDefault,
@@ -211,27 +244,3 @@ export const processProductImage = onObjectFinalized(
     }
   },
 );
-// ---------- Dead-Letter Handler ----------
-/**
- * Moves a file to the dead-letter bucket when processing fails.
- * @param {string} filePath - The path of the file to move to
- * dead-letter storage
- */
-async function moveToDeadLetter(filePath: string) {
-  try {
-    const bucket = storage;
-    const fileName = path.basename(filePath);
-    const randomThreeDigits = Math.floor(100 + Math.random() * 900);
-    const destination = `dead-letter/${randomThreeDigits}_${fileName}`;
-    await bucket.file(filePath).setMetadata({
-      metadata: {
-        status: "dead-letter",
-      },
-    });
-    await bucket.file(filePath).move(destination);
-
-    console.warn(`📦 Moved to dead-letter → ${destination}`);
-  } catch (err) {
-    console.error("❌ Dead-letter move failed:", err);
-  }
-}

@@ -6,9 +6,9 @@ dotenv.config();
 const projectRoot = path.resolve(__dirname, "..");
 const filePath = path.join(projectRoot, "test-images", "product-test.webp");
 const bucketName = process.env.BUCKET_NAME || "flezta.firebasestorage.app";
-const projectId = process.env.FIREBASE_PROJECT_ID
-const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n")
+const projectId = process.env.PROJECT_ID
+const clientEmail = process.env.CLIENT_EMAIL
+const privateKey = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n")
 if (!projectId || !clientEmail || !privateKey) {
   throw new Error("Missing Firebase credentials in environment variables");
 }
