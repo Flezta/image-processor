@@ -9,178 +9,214 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ---------- Interfaces ----------
-export interface ProductImageSizes {
-  thumbnail: string; // 200px
-  medium: string; // 800px
-  large: string; // 1500px
-}
+// ---------- Config ----------
+const MAX_FILE_SIZE_MB = 10;
+const MIN_WIDTH = 300;
+const MIN_HEIGHT = 300;
+const ALLOWED_FORMATS = ["jpeg", "png", "webp", "avif"];
 
-export interface ProductImage {
-  name: string;
-  sizes: ProductImageSizes;
-  isDefault?: boolean;
-  order?: number;
-  attributes: { color: string };
-}
-
-export interface ProductDocument extends mongoose.Document {
-  productId: string;
-  variantProperties: Record<string, string[]>;
-  images: ProductImage[];
-}
-
-// ---------- Env ----------
-const MONGO_URI = process.env.MONGO_URI;
-const BUCKET_NAME = process.env.BUCKET_NAME;
-const REGION = process.env.REGION;
-
-if (!MONGO_URI || !BUCKET_NAME || !REGION) {
-  throw new Error(
-    "Missing required environment variables: MONGO_URI, BUCKET_NAME, and REGION",
-  );
-}
-
-// ---------- Firebase ----------
-admin.initializeApp();
-const storage = admin.storage().bucket(BUCKET_NAME);
-
-// ---------- Mongo Connection ----------
-let mongoConnected = false;
-
-/**
- * Connects to MongoDB if not already connected.
- */
-async function connectMongo(): Promise<void> {
-  if (!mongoConnected) {
-    if (!MONGO_URI) {
-      throw new Error("MONGO_URI is not defined in environment variables");
-    }
-    await mongoose.connect(MONGO_URI);
-    mongoConnected = true;
-  }
-}
-
-// ---------- Product Schema ----------
-const ProductSchema = new mongoose.Schema(
-  {
-    productId: String,
-    variantProperties: {type: Object, default: {}},
-    images: [
-      {
-        name: String,
-        sizes: {
-          thumbnail: String,
-          medium: String,
-          large: String,
-        },
-        isDefault: Boolean,
-        attributes: {color: String},
-      },
-    ],
-  },
-  {collection: "products"},
-);
-
-const Product = mongoose.model<ProductDocument>("Product", ProductSchema);
-
-// ---------- Image Sizes ----------
-const IMAGE_SIZES: Record<keyof ProductImageSizes, number> = {
+const IMAGE_SIZES = {
   thumbnail: 200,
   medium: 800,
   large: 1500,
 };
 
-// ---------- Dead-Letter Handler ----------
-/**
- * Moves a file to the dead-letter folder when processing fails.
- * @param filePath Path of the file to move
- */
-async function moveToDeadLetter(filePath: string): Promise<void> {
+// ---------- Firebase ----------
+admin.initializeApp();
+const storage = admin.storage().bucket(process.env.BUCKET_NAME);
+
+// ---------- Mongo ----------
+let mongoConnected = false;
+
+async function connectMongo() {
+  if (!process.env.MONGO_URI) {
+    throw new Error("MONGO_URI not set");
+  }
+  if (!mongoConnected) {
+    await mongoose.connect(process.env.MONGO_URI);
+    mongoConnected = true;
+  }
+}
+
+// ---------- Models ----------
+const Product = mongoose.model(
+  "Product",
+  new mongoose.Schema(
+    {
+      productId: String,
+      variantProperties: {type: Object, default: {}},
+      images: [],
+    },
+    {collection: "products"},
+  ),
+);
+
+// ---------- Helpers ----------
+
+async function moveToDeadLetter(filePath: string) {
   try {
     const fileName = path.basename(filePath);
-    const randomThreeDigits = Math.floor(100 + Math.random() * 900);
-    const destination = `dead-letter/${randomThreeDigits}_${fileName}`;
+    const random = Math.floor(100 + Math.random() * 900);
+    const destination = `dead-letter/${random}_${fileName}`;
 
     await storage.file(filePath).setMetadata({
       metadata: {status: "dead-letter"},
     });
+
     await storage.file(filePath).move(destination);
 
-    console.warn(`📦 Moved to dead-letter → ${destination}`);
+    console.warn("Moved to dead-letter:", destination);
   } catch (err) {
-    console.error("❌ Dead-letter move failed:", err);
+    console.error("Dead-letter failed:", err);
   }
 }
 
+function extractMetadata(event: any) {
+  const filePath = event.data.name;
+  const metadata = event.data.metadata || {};
+
+  return {
+    filePath,
+    productId: metadata.productId || metadata.productid,
+    color: metadata.color,
+    metadata,
+  };
+}
+
+function shouldSkip(filePath: string, metadata: any) {
+  if (!filePath) return true;
+  if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
+    return true;
+  }
+  if (metadata?.processed === "true") return true;
+  return false;
+}
+
+async function validateProduct(productId: string, color: string) {
+  const product = await Product.findOne({productId});
+
+  if (!product) throw new Error("PRODUCT_NOT_FOUND");
+
+  const colorAxis = Object.keys(product.variantProperties).find(
+    (k) => k.toLowerCase() === "color" || k.toLowerCase() === "colour",
+  );
+
+  if (!colorAxis) throw new Error("COLOR_AXIS_NOT_FOUND");
+
+  const allowedColors = product.variantProperties[colorAxis] || [];
+
+  if (!allowedColors.includes(color)) {
+    throw new Error("INVALID_COLOR");
+  }
+
+  return product;
+}
+
+async function downloadFile(filePath: string, tempPath: string) {
+  await storage.file(filePath).download({destination: tempPath});
+}
+
+async function validateImage(tempPath: string) {
+  // Size check
+  const stats = await fs.stat(tempPath);
+  const sizeMB = stats.size / (1024 * 1024);
+
+  if (sizeMB > MAX_FILE_SIZE_MB) {
+    throw new Error("FILE_TOO_LARGE");
+  }
+
+  // Metadata check
+  let metadata;
+  try {
+    metadata = await sharp(tempPath).metadata();
+  } catch {
+    throw new Error("INVALID_IMAGE");
+  }
+
+  if (!metadata.format || !ALLOWED_FORMATS.includes(metadata.format)) {
+    throw new Error("UNSUPPORTED_FORMAT");
+  }
+
+  if (
+    (metadata.width || 0) < MIN_WIDTH ||
+    (metadata.height || 0) < MIN_HEIGHT
+  ) {
+    throw new Error("IMAGE_TOO_SMALL");
+  }
+
+  return metadata;
+}
+
+async function processAndUploadImages(
+  tempInput: string,
+  fileName: string,
+  productId: string,
+) {
+  const urls: any = {};
+
+  for (const [key, width] of Object.entries(IMAGE_SIZES)) {
+    const outputName = `${path.parse(fileName).name}_${width}.jpg`;
+    const tempOutput = path.join(os.tmpdir(), outputName);
+
+    await sharp(tempInput)
+      .resize(width, width, {fit: "inside", withoutEnlargement: true})
+      .jpeg({quality: 85})
+      .toFile(tempOutput);
+
+    const destination = `products/${productId}/${outputName}`;
+
+    await storage.upload(tempOutput, {
+      destination,
+      metadata: {
+        cacheControl: "public, max-age=31536000, immutable",
+        processed: "true",
+      },
+    });
+
+    urls[key] =
+      `https://storage.googleapis.com/${process.env.BUCKET_NAME}/${destination}`;
+
+    await fs.unlink(tempOutput);
+  }
+
+  return urls;
+}
+
+async function updateProductImages(
+  product: any,
+  productId: string,
+  fileName: string,
+  urls: any,
+  color: string,
+) {
+  const hasDefault = product.images?.some((img: any) => img.isDefault);
+
+  const newImage = {
+    name: fileName,
+    sizes: urls,
+    isDefault: !hasDefault,
+    attributes: {color},
+  };
+
+  await Product.updateOne({productId}, {$push: {images: newImage}});
+}
+
 // ---------- Main Function ----------
-/**
- * Processes uploaded product images:
- * - Resizes to thumbnail, medium, large
- * - Uploads to bucket under `products/{productId}/`
- * - Updates product document in Mongo
- */
+
 export const processProductImage = onObjectFinalized(
   {
-    bucket: BUCKET_NAME,
-    region: REGION,
+    bucket: process.env.BUCKET_NAME,
+    region: process.env.REGION,
     memory: "1GiB",
     timeoutSeconds: 300,
   },
   async (event) => {
-    const filePath = event.data.name;
-    const metadata = event.data.metadata || {};
+    const {filePath, productId, color, metadata} = extractMetadata(event);
 
-    if (!filePath) return;
+    if (shouldSkip(filePath, metadata)) return;
 
-    // Skip already processed or dead-letter
-    if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
-      console.log("Skipping already processed file:", filePath);
-      return;
-    }
-
-    if (metadata?.processed === "true") return;
-
-    const productId = metadata.productId || metadata.productid;
-    const color = metadata.color;
-
-    if (!productId) {
-      console.error("Missing productId metadata for", filePath);
-      return moveToDeadLetter(filePath);
-    }
-    if (!color) {
-      console.error("Missing color metadata for", filePath);
-      return moveToDeadLetter(filePath);
-    }
-
-    await connectMongo();
-
-    const product = await Product.findOne({productId});
-
-    if (!product) {
-      console.error("Product not found for productId:", productId);
-      return moveToDeadLetter(filePath);
-    }
-
-    // Validate color axis exists
-    const colorAxis = Object.keys(product.variantProperties).find(
-      (k) => k.toLowerCase() === "color" || k.toLowerCase() === "colour",
-    );
-
-    if (!colorAxis) {
-      console.error("Color axis not found for productId:", productId);
-      return moveToDeadLetter(filePath);
-    }
-
-    const allowedColors = product.variantProperties[colorAxis] || [];
-
-    if (!allowedColors.includes(color)) {
-      console.error(
-        "Color not allowed for productId:",
-        productId,
-        "color:",
-        color,
-      );
+    if (!productId || !color) {
+      console.error("Missing metadata:", filePath);
       return moveToDeadLetter(filePath);
     }
 
@@ -188,58 +224,24 @@ export const processProductImage = onObjectFinalized(
     const tempInput = path.join(os.tmpdir(), fileName);
 
     try {
-      await storage.file(filePath).download({destination: tempInput});
+      await connectMongo();
 
-      const processedUrls: ProductImageSizes = {
-        thumbnail: "",
-        medium: "",
-        large: "",
-      };
+      const product = await validateProduct(productId, color);
 
-      for (const [key, width] of Object.entries(IMAGE_SIZES)) {
-        const outputName = `${path.parse(fileName).name}_${width}.jpg`;
-        const tempOutput = path.join(os.tmpdir(), outputName);
+      await downloadFile(filePath, tempInput);
 
-        await sharp(tempInput)
-          .resize(width, width, {fit: "inside", withoutEnlargement: true})
-          .jpeg({quality: 85})
-          .toFile(tempOutput);
+      await validateImage(tempInput);
 
-        const destination = `products/${productId}/${outputName}`;
-
-        await storage.upload(tempOutput, {
-          destination,
-          metadata: {
-            cacheControl: "public, max-age=31536000, immutable",
-            processed: "true",
-          },
-        });
-
-        processedUrls[key as keyof ProductImageSizes] =
-          `https://storage.googleapis.com/${BUCKET_NAME}/${destination}`;
-        await fs.unlink(tempOutput);
-      }
+      const urls = await processAndUploadImages(tempInput, fileName, productId);
 
       await storage.file(filePath).delete();
       await fs.unlink(tempInput);
 
-      // Determine default image
-      const hasDefault = product.images?.some(
-        (img: ProductImage) => img.isDefault,
-      );
+      await updateProductImages(product, productId, fileName, urls, color);
 
-      const newImage: ProductImage = {
-        name: fileName,
-        sizes: processedUrls,
-        isDefault: !hasDefault,
-        attributes: {color},
-      };
-
-      await Product.updateOne({productId}, {$push: {images: newImage}});
-
-      console.log(`✅ Processed ${fileName}`);
-    } catch (error) {
-      console.error("Processing failed:", error);
+      console.log("Processed:", fileName);
+    } catch (err: any) {
+      console.error("Processing failed:", err.message);
       await moveToDeadLetter(filePath);
     }
   },

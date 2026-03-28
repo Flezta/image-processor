@@ -9,8 +9,8 @@
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "deploy:dev": "npm run lint:fix && cp .env.dev .env && npm run build && firebase deploy --project=flezta --only functions",
-    "deploy:prod": "npm run lint:fix && cp .env.prod .env && npm run build && firebase deploy --project=flezta-prod --only functions",
+    "deploy:dev": "npm run lint:fix && cp .env.dev .env && npm run build && npx firebase deploy --project=flezta --only functions",
+    "deploy:prod": "npm run lint:fix && cp .env.prod .env && npm run build && npx firebase deploy --project=flezta-prod --only functions",
     "logs": "firebase functions:log",
     "upload:test:dev": "cp .env.dev .env && npx ts-node scripts/uploadTestFile.ts",
     "upload:test:prod": "cp .env.prod .env && npx ts-node scripts/uploadTestFile.ts"
