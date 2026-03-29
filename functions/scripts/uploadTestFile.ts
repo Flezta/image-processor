@@ -1,14 +1,13 @@
-// const { spawn } = require("child_process");
-const path = require("path");
+import path from "path";
 import { Storage } from "@google-cloud/storage";
 import dotenv from "dotenv";
 dotenv.config();
 const projectRoot = path.resolve(__dirname, "..");
 const filePath = path.join(projectRoot, "test-images", "product-test.webp");
 const bucketName = process.env.BUCKET_NAME || "flezta.firebasestorage.app";
-const projectId = process.env.PROJECT_ID
-const clientEmail = process.env.CLIENT_EMAIL
-const privateKey = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n")
+const projectId = process.env.PROJECT_ID;
+const clientEmail = process.env.CLIENT_EMAIL;
+const privateKey = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
 if (!projectId || !clientEmail || !privateKey) {
   throw new Error("Missing Firebase credentials in environment variables");
 }

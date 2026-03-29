@@ -20,6 +20,7 @@ const IMAGE_SIZES = {
   medium: 800,
   large: 1500,
 };
+const BASE_URL = `https://storage.googleapis.com/${process.env.BUCKET_NAME}`;
 
 // ---------- Firebase ----------
 admin.initializeApp();
@@ -65,7 +66,12 @@ async function moveToDeadLetter(filePath: string, reason?: string) {
 
     await storage.file(filePath).move(destination);
 
-    console.warn("Moved to dead-letter:", destination, "Reason:", reason || "unknown");
+    console.warn(
+      "Moved to dead-letter:",
+      destination,
+      "Reason:",
+      reason || "unknown",
+    );
   } catch (err) {
     console.error("Dead-letter failed:", err);
   }
@@ -157,31 +163,43 @@ async function processAndUploadImages(
   tempInput: string,
   fileName: string,
   productId: string,
+  color: string,
 ) {
-  const urls: any = {};
+  const urls: Record<string, string> = {};
 
-  for (const [key, width] of Object.entries(IMAGE_SIZES)) {
-    const outputName = `${path.parse(fileName).name}_${width}.jpg`;
+  const baseName = path.parse(fileName).name;
+
+  for (const [sizeKey, width] of Object.entries(IMAGE_SIZES)) {
+    const outputName = `${baseName}_${width}.jpg`;
     const tempOutput = path.join(os.tmpdir(), outputName);
 
+    // 1. Resize + optimize
     await sharp(tempInput)
-      .resize(width, width, { fit: "inside", withoutEnlargement: true })
+      .resize(width, width, {
+        fit: "inside",
+        withoutEnlargement: true,
+      })
       .jpeg({ quality: 85 })
       .toFile(tempOutput);
 
-    const destination = `products/${productId}/${outputName}`;
+    // 2. NEW STRUCTURE (your requirement)
+    const destination = `products/${productId}/${color}/${sizeKey}/${outputName}`;
 
+    // 3. Upload
     await storage.upload(tempOutput, {
       destination,
       metadata: {
         cacheControl: "public, max-age=31536000, immutable",
         processed: "true",
+        productId,
+        color,
       },
     });
 
-    urls[key] =
-      `https://storage.googleapis.com/${process.env.BUCKET_NAME}/${destination}`;
+    // 4. Public URL (clean base URL usage)
+    urls[sizeKey] = `${BASE_URL}/${destination}`;
 
+    // 5. cleanup
     await fs.unlink(tempOutput);
   }
 
@@ -239,7 +257,12 @@ export const processProductImage = onObjectFinalized(
 
       await validateImage(tempInput);
 
-      const urls = await processAndUploadImages(tempInput, fileName, productId);
+      const urls = await processAndUploadImages(
+        tempInput,
+        fileName,
+        productId,
+        color,
+      );
 
       await storage.file(filePath).delete();
       await fs.unlink(tempInput);

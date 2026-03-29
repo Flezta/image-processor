@@ -15,13 +15,23 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -46,6 +56,7 @@ const IMAGE_SIZES = {
     medium: 800,
     large: 1500,
 };
+const BASE_URL = `https://storage.googleapis.com/${process.env.BUCKET_NAME}`;
 // ---------- Firebase ----------
 admin.initializeApp();
 const storage = admin.storage().bucket(process.env.BUCKET_NAME);
@@ -67,16 +78,16 @@ const Product = mongoose_1.default.model("Product", new mongoose_1.default.Schem
     images: [],
 }, { collection: "products" }));
 // ---------- Helpers ----------
-async function moveToDeadLetter(filePath) {
+async function moveToDeadLetter(filePath, reason) {
     try {
         const fileName = path_1.default.basename(filePath);
         const random = Math.floor(100 + Math.random() * 900);
         const destination = `dead-letter/${random}_${fileName}`;
         await storage.file(filePath).setMetadata({
-            metadata: { status: "dead-letter" },
+            metadata: { status: "dead-letter", reason: reason || "unknown" },
         });
         await storage.file(filePath).move(destination);
-        console.warn("Moved to dead-letter:", destination);
+        console.warn("Moved to dead-letter:", destination, "Reason:", reason || "unknown");
     }
     catch (err) {
         console.error("Dead-letter failed:", err);
@@ -97,12 +108,10 @@ function shouldSkip(filePath, metadata) {
         console.error("No file path in event");
         return true;
     }
-    if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
-        console.log("Skipping already processed file:", filePath);
+    if (metadata?.processed === "true") {
         return true;
     }
-    if (metadata?.processed === "true") {
-        console.log("Skipping already processed file (metadata):", filePath);
+    if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
         return true;
     }
     return false;
@@ -147,25 +156,35 @@ async function validateImage(tempPath) {
     }
     return metadata;
 }
-async function processAndUploadImages(tempInput, fileName, productId) {
+async function processAndUploadImages(tempInput, fileName, productId, color) {
     const urls = {};
-    for (const [key, width] of Object.entries(IMAGE_SIZES)) {
-        const outputName = `${path_1.default.parse(fileName).name}_${width}.jpg`;
+    const baseName = path_1.default.parse(fileName).name;
+    for (const [sizeKey, width] of Object.entries(IMAGE_SIZES)) {
+        const outputName = `${baseName}_${width}.jpg`;
         const tempOutput = path_1.default.join(os_1.default.tmpdir(), outputName);
+        // 1. Resize + optimize
         await (0, sharp_1.default)(tempInput)
-            .resize(width, width, { fit: "inside", withoutEnlargement: true })
+            .resize(width, width, {
+            fit: "inside",
+            withoutEnlargement: true,
+        })
             .jpeg({ quality: 85 })
             .toFile(tempOutput);
-        const destination = `products/${productId}/${outputName}`;
+        // 2. NEW STRUCTURE (your requirement)
+        const destination = `products/${productId}/${color}/${sizeKey}/${outputName}`;
+        // 3. Upload
         await storage.upload(tempOutput, {
             destination,
             metadata: {
                 cacheControl: "public, max-age=31536000, immutable",
                 processed: "true",
+                productId,
+                color,
             },
         });
-        urls[key] =
-            `https://storage.googleapis.com/${process.env.BUCKET_NAME}/${destination}`;
+        // 4. Public URL (clean base URL usage)
+        urls[sizeKey] = `${BASE_URL}/${destination}`;
+        // 5. cleanup
         await promises_1.default.unlink(tempOutput);
     }
     return urls;
@@ -193,7 +212,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
         return;
     if (!productId || !color) {
         console.error("Missing metadata:", filePath);
-        return moveToDeadLetter(filePath);
+        return moveToDeadLetter(filePath, "MISSING_METADATA");
     }
     const fileName = path_1.default.basename(filePath);
     const tempInput = path_1.default.join(os_1.default.tmpdir(), fileName);
@@ -203,7 +222,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
         const product = await validateProduct(productId, color);
         await downloadFile(filePath, tempInput);
         await validateImage(tempInput);
-        const urls = await processAndUploadImages(tempInput, fileName, productId);
+        const urls = await processAndUploadImages(tempInput, fileName, productId, color);
         await storage.file(filePath).delete();
         await promises_1.default.unlink(tempInput);
         await updateProductImages(product, productId, fileName, urls, color);
@@ -211,7 +230,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
     }
     catch (err) {
         console.error("Processing failed:", err.message);
-        await moveToDeadLetter(filePath);
+        await moveToDeadLetter(filePath, err.message);
     }
 });
 //# sourceMappingURL=processProductImage.js.map
