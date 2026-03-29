@@ -182,6 +182,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
     memory: "1GiB",
     timeoutSeconds: 300,
 }, async (event) => {
+    console.log("Event received:", event.data.name);
     const { filePath, productId, color, metadata } = extractMetadata(event);
     if (shouldSkip(filePath, metadata))
         return;
@@ -193,6 +194,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
     const tempInput = path_1.default.join(os_1.default.tmpdir(), fileName);
     try {
         await connectMongo();
+        console.log("Connected to MongoDB");
         const product = await validateProduct(productId, color);
         await downloadFile(filePath, tempInput);
         await validateImage(tempInput);

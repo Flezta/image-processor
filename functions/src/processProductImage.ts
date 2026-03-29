@@ -211,6 +211,7 @@ export const processProductImage = onObjectFinalized(
     timeoutSeconds: 300,
   },
   async (event) => {
+    console.log("Event received:", event.data.name);
     const {filePath, productId, color, metadata} = extractMetadata(event);
 
     if (shouldSkip(filePath, metadata)) return;
@@ -225,7 +226,7 @@ export const processProductImage = onObjectFinalized(
 
     try {
       await connectMongo();
-
+      console.log("Connected to MongoDB");
       const product = await validateProduct(productId, color);
 
       await downloadFile(filePath, tempInput);
