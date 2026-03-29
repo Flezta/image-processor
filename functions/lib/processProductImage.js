@@ -93,13 +93,18 @@ function extractMetadata(event) {
     };
 }
 function shouldSkip(filePath, metadata) {
-    if (!filePath)
-        return true;
-    if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
+    if (!filePath) {
+        console.error("No file path in event");
         return true;
     }
-    if (metadata?.processed === "true")
+    if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
+        console.log("Skipping already processed file:", filePath);
         return true;
+    }
+    if (metadata?.processed === "true") {
+        console.log("Skipping already processed file (metadata):", filePath);
+        return true;
+    }
     return false;
 }
 async function validateProduct(productId, color) {

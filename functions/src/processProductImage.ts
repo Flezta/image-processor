@@ -1,4 +1,4 @@
-import {onObjectFinalized} from "firebase-functions/v2/storage";
+import { onObjectFinalized } from "firebase-functions/v2/storage";
 import * as admin from "firebase-admin";
 import mongoose from "mongoose";
 import sharp from "sharp";
@@ -44,28 +44,28 @@ const Product = mongoose.model(
   new mongoose.Schema(
     {
       productId: String,
-      variantProperties: {type: Object, default: {}},
+      variantProperties: { type: Object, default: {} },
       images: [],
     },
-    {collection: "products"},
+    { collection: "products" },
   ),
 );
 
 // ---------- Helpers ----------
 
-async function moveToDeadLetter(filePath: string) {
+async function moveToDeadLetter(filePath: string, reason?: string) {
   try {
     const fileName = path.basename(filePath);
     const random = Math.floor(100 + Math.random() * 900);
     const destination = `dead-letter/${random}_${fileName}`;
 
     await storage.file(filePath).setMetadata({
-      metadata: {status: "dead-letter"},
+      metadata: { status: "dead-letter", reason: reason || "unknown" },
     });
 
     await storage.file(filePath).move(destination);
 
-    console.warn("Moved to dead-letter:", destination);
+    console.warn("Moved to dead-letter:", destination, "Reason:", reason || "unknown");
   } catch (err) {
     console.error("Dead-letter failed:", err);
   }
@@ -84,16 +84,22 @@ function extractMetadata(event: any) {
 }
 
 function shouldSkip(filePath: string, metadata: any) {
-  if (!filePath) return true;
+  if (!filePath) {
+    console.error("No file path in event");
+    return true;
+  }
+  if (metadata?.processed === "true") {
+    return true;
+  }
   if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
     return true;
   }
-  if (metadata?.processed === "true") return true;
+
   return false;
 }
 
 async function validateProduct(productId: string, color: string) {
-  const product = await Product.findOne({productId});
+  const product = await Product.findOne({ productId });
 
   if (!product) throw new Error("PRODUCT_NOT_FOUND");
 
@@ -113,7 +119,7 @@ async function validateProduct(productId: string, color: string) {
 }
 
 async function downloadFile(filePath: string, tempPath: string) {
-  await storage.file(filePath).download({destination: tempPath});
+  await storage.file(filePath).download({ destination: tempPath });
 }
 
 async function validateImage(tempPath: string) {
@@ -159,8 +165,8 @@ async function processAndUploadImages(
     const tempOutput = path.join(os.tmpdir(), outputName);
 
     await sharp(tempInput)
-      .resize(width, width, {fit: "inside", withoutEnlargement: true})
-      .jpeg({quality: 85})
+      .resize(width, width, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85 })
       .toFile(tempOutput);
 
     const destination = `products/${productId}/${outputName}`;
@@ -195,10 +201,10 @@ async function updateProductImages(
     name: fileName,
     sizes: urls,
     isDefault: !hasDefault,
-    attributes: {color},
+    attributes: { color },
   };
 
-  await Product.updateOne({productId}, {$push: {images: newImage}});
+  await Product.updateOne({ productId }, { $push: { images: newImage } });
 }
 
 // ---------- Main Function ----------
@@ -212,13 +218,13 @@ export const processProductImage = onObjectFinalized(
   },
   async (event) => {
     console.log("Event received:", event.data.name);
-    const {filePath, productId, color, metadata} = extractMetadata(event);
+    const { filePath, productId, color, metadata } = extractMetadata(event);
 
     if (shouldSkip(filePath, metadata)) return;
 
     if (!productId || !color) {
       console.error("Missing metadata:", filePath);
-      return moveToDeadLetter(filePath);
+      return moveToDeadLetter(filePath, "MISSING_METADATA");
     }
 
     const fileName = path.basename(filePath);
@@ -243,7 +249,7 @@ export const processProductImage = onObjectFinalized(
       console.log("Processed:", fileName);
     } catch (err: any) {
       console.error("Processing failed:", err.message);
-      await moveToDeadLetter(filePath);
+      await moveToDeadLetter(filePath, err.message);
     }
   },
 );
