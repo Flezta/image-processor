@@ -5,8 +5,8 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ---------------- CONFIG ----------------
-const color = "red";
-const productId = "45109E-4868514";
+const color = "teal";
+const productId = "45109E-7505658";
 const API_URL = `http://localhost:8080/products/${productId}/images/upload-urls/${color}?count=5`;
 
 const IMAGE_FOLDER = path.join(__dirname, "multi-test-images");

@@ -94,10 +94,14 @@ function shouldSkip(filePath: string, metadata: any) {
     console.error("No file path in event");
     return true;
   }
-  if (metadata?.processed === "true") {
+
+  // ✅ Only process files inside raw/
+  if (!filePath.startsWith("raw/")) {
     return true;
   }
-  if (filePath.includes("products/") || filePath.includes("dead-letter/")) {
+
+  // ✅ Skip already processed files
+  if (metadata?.processed === "true") {
     return true;
   }
 
@@ -195,6 +199,7 @@ async function processAndUploadImages(
         color,
       },
     });
+    await storage.file(destination).makePublic();
 
     // 4. Public URL (clean base URL usage)
     urls[sizeKey] = `${BASE_URL}/${destination}`;
@@ -235,7 +240,6 @@ export const processProductImage = onObjectFinalized(
     timeoutSeconds: 300,
   },
   async (event) => {
-    console.log("Event received:", event.data.name);
     const { filePath, productId, color, metadata } = extractMetadata(event);
 
     if (shouldSkip(filePath, metadata)) return;
