@@ -242,8 +242,10 @@ export const processProductImage = onObjectFinalized(
   async (event) => {
     const { filePath, productId, color, metadata } = extractMetadata(event);
 
-    if (shouldSkip(filePath, metadata)) return;
-
+    if (shouldSkip(filePath, metadata)) {
+      console.log("Skipping file:", filePath);
+      return;
+    }
     if (!productId || !color) {
       console.error("Missing metadata:", filePath);
       return moveToDeadLetter(filePath, "MISSING_METADATA");
