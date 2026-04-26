@@ -86,6 +86,7 @@ function extractMetadata(event: any) {
     productId: metadata.productId || metadata.productid,
     color: metadata.color,
     metadata,
+    isDefault: metadata.isDefault,
   };
 }
 
@@ -217,13 +218,14 @@ async function updateProductImages(
   fileName: string,
   urls: any,
   color: string,
+  isDefault?: boolean,
 ) {
   const hasDefault = product.images?.some((img: any) => img.isDefault);
 
   const newImage = {
     name: fileName,
     sizes: urls,
-    isDefault: !hasDefault,
+    isDefault: isDefault ?? !hasDefault,
     attributes: { color },
   };
 
@@ -240,7 +242,8 @@ export const processProductImage = onObjectFinalized(
     timeoutSeconds: 300,
   },
   async (event) => {
-    const { filePath, productId, color, metadata } = extractMetadata(event);
+    const { filePath, productId, color, metadata, isDefault } =
+      extractMetadata(event);
 
     if (shouldSkip(filePath, metadata)) {
       console.log("Skipping file:", filePath);
@@ -273,7 +276,7 @@ export const processProductImage = onObjectFinalized(
       await storage.file(filePath).delete();
       await fs.unlink(tempInput);
 
-      await updateProductImages(product, productId, fileName, urls, color);
+      await updateProductImages(product, productId, fileName, urls, color, isDefault);
 
       console.log("Processed:", fileName);
     } catch (err: any) {

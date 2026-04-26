@@ -101,6 +101,7 @@ function extractMetadata(event) {
         productId: metadata.productId || metadata.productid,
         color: metadata.color,
         metadata,
+        isDefault: metadata.isDefault,
     };
 }
 function shouldSkip(filePath, metadata) {
@@ -192,12 +193,12 @@ async function processAndUploadImages(tempInput, fileName, productId, color) {
     }
     return urls;
 }
-async function updateProductImages(product, productId, fileName, urls, color) {
+async function updateProductImages(product, productId, fileName, urls, color, isDefault) {
     const hasDefault = product.images?.some((img) => img.isDefault);
     const newImage = {
         name: fileName,
         sizes: urls,
-        isDefault: !hasDefault,
+        isDefault: isDefault ?? !hasDefault,
         attributes: { color },
     };
     await Product.updateOne({ productId }, { $push: { images: newImage } });
@@ -209,7 +210,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
     memory: "1GiB",
     timeoutSeconds: 300,
 }, async (event) => {
-    const { filePath, productId, color, metadata } = extractMetadata(event);
+    const { filePath, productId, color, metadata, isDefault } = extractMetadata(event);
     if (shouldSkip(filePath, metadata)) {
         console.log("Skipping file:", filePath);
         return;
@@ -229,7 +230,7 @@ exports.processProductImage = (0, storage_1.onObjectFinalized)({
         const urls = await processAndUploadImages(tempInput, fileName, productId, color);
         await storage.file(filePath).delete();
         await promises_1.default.unlink(tempInput);
-        await updateProductImages(product, productId, fileName, urls, color);
+        await updateProductImages(product, productId, fileName, urls, color, isDefault);
         console.log("Processed:", fileName);
     }
     catch (err) {
