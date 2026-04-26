@@ -1,0 +1,33 @@
+import * as dotenv from "dotenv";
+import { exec } from "child_process";
+
+// Load environment variables from .env file
+dotenv.config();
+
+// Extract environment variables from process.env
+const BUCKET_NAME = process.env.BUCKET_NAME;
+
+if (!BUCKET_NAME) {
+  console.error("Error: BUCKET_NAME is not defined in .env file");
+  process.exit(1);
+}
+
+console.log(
+  `Deploying CORS configuration to Firebase Storage bucket: gs://${BUCKET_NAME}`,
+);
+
+// Command to set CORS configuration using gsutil
+const command = `gsutil cors set src/cors.json gs://${BUCKET_NAME}`;
+
+// Execute the command
+exec(command, (error, stdout, stderr) => {
+  if (error) {
+    console.error(`Error deploying CORS configuration: ${error.message}`);
+    return;
+  }
+  if (stderr) {
+    console.error(`stderr: ${stderr}`);
+    return;
+  }
+  console.log(`CORS configuration deployed successfully: ${stdout}`);
+});

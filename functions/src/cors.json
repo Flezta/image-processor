@@ -1,0 +1,12 @@
+[
+  {
+    "origin": "*",
+    "method": ["GET", "POST", "PUT", "OPTIONS"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "x-goog-meta-productid",
+      "x-goog-meta-color"
+    ]
+  }
+]

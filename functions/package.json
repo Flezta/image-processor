@@ -15,7 +15,11 @@
     "multiImageUpload:test:dev": "cp .env.dev .env && npx tsx scripts/multiImageUploadTest.ts",
     "multiImageUpload:test:prod": "cp .env.prod .env && npx tsx scripts/multiImageUploadTest.ts",
     "upload:test:dev": "cp .env.dev .env && npx ts-node scripts/uploadTestFile.ts",
-    "upload:test:prod": "cp .env.prod .env && npx ts-node scripts/uploadTestFile.ts"
+    "upload:test:prod": "cp .env.prod .env && npx ts-node scripts/uploadTestFile.ts",
+    "deploy:dev:cors": "cp .env.dev .env && npx tsx scripts/deployCorsConfig.ts",
+    "deploy:prod:cors": "cp .env.prod .env && npx tsx scripts/deployCorsConfig.ts",
+    "check:dev:cors": "cp .env.dev .env && npx tsx scripts/checkCorsConfig.ts",
+    "check:prod:cors": "cp .env.prod .env && npx tsx scripts/checkCorsConfig.ts"
   },
   "engines": {
     "node": "24"
