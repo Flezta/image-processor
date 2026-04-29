@@ -6,7 +6,9 @@
     "responseHeader": [
       "Content-Type",
       "x-goog-meta-productid",
-      "x-goog-meta-color"
+      "x-goog-meta-color",
+      "x-goog-meta-isdefault",
+      "x-goog-meta-isDefault"
     ]
   }
 ]

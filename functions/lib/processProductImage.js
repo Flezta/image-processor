@@ -101,7 +101,7 @@ function extractMetadata(event) {
         productId: metadata.productId || metadata.productid,
         color: metadata.color,
         metadata,
-        isDefault: metadata.isDefault,
+        isDefault: metadata.isDefault || metadata.isdefault
     };
 }
 function shouldSkip(filePath, metadata) {
